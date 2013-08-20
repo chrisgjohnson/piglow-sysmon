@@ -13,11 +13,12 @@
 #include <sn3218.h>
 #include <piGlow.h>
 #include <signal.h>
-
+#include <dirent.h>
+#include <libgen.h>
 
 using namespace std;
 
-
+// Utility timer class, for network monitoring
 class Timer
 {
 public:
@@ -41,10 +42,11 @@ private:
 	long nanoseconds;
 };
 
+// Class to monitor temperature, CPU usage and network usage on a Raspberry Pi
 class PiMonitor
 {
 public:
-	PiMonitor()
+	PiMonitor(const string &netInterface) : netInterface_(netInterface)
 	{
 		float dummy;
 		GetCPUUsage();
@@ -62,9 +64,9 @@ public:
 		statfile.close();
 		long newTotal = user+nice+system+idle+iowait+irq+softirq;
 		long newWork = user+nice+system;
-		float retval=100.0*static_cast<float>(newWork-workJiffies)/static_cast<float>(newTotal-totalJiffies);
-		workJiffies=newWork;
-		totalJiffies=newTotal;
+		float retval=100.0*static_cast<float>(newWork-workJiffies_)/static_cast<float>(newTotal-totalJiffies_);
+		workJiffies_=newWork;
+		totalJiffies_=newTotal;
 		return retval;
 	}
 	
@@ -81,29 +83,36 @@ public:
 	void GetNetworkUsage(float &receiveBytesPerSecond, float &sendBytesPerSecond)
 	{
 		unsigned long receiveBytes, sendBytes, dummy;
-		double period = networkTimer();
+		double period = networkTimer_();
 		ifstream netfile("/proc/net/dev");
-		if (!netfile.is_open()) throw runtime_error("Can't open /sys/class/thermal/thermal_zone0/temp");
-		while(1)
+		if (!netfile.is_open()) throw runtime_error("Can't open /proc/net/dev");
+		while (netfile)
 		{ 
 			string interface;
 			netfile >> interface;
-			if (interface=="eth0:") break;
-			else 
-			netfile.ignore(numeric_limits<streamsize>::max(), '\n');
+			if (interface==string(netInterface_+":")) break;
+			else netfile.ignore(numeric_limits<streamsize>::max(), '\n');
+
+			if (netfile.eof() || netfile.bad())
+			{
+				ostringstream err;
+				err << "Couldn't find network interface " << netInterface_;
+				throw runtime_error(err.str().c_str());
+			}
 		}
 		netfile >> receiveBytes >> dummy >> dummy >> dummy >> dummy >> dummy >> dummy >> dummy >> sendBytes;
 		netfile.close();
-		receiveBytesPerSecond=(receiveBytes-lastReceiveBytes)/period;
-		sendBytesPerSecond=(sendBytes-lastSendBytes)/period;
+		receiveBytesPerSecond=(receiveBytes-lastReceiveBytes_)/period;
+		sendBytesPerSecond=(sendBytes-lastSendBytes_)/period;
 		
-		lastReceiveBytes=receiveBytes;
-		lastSendBytes=sendBytes;
+		lastReceiveBytes_=receiveBytes;
+		lastSendBytes_=sendBytes;
 	}
 private:
-	unsigned long totalJiffies, workJiffies;
-	unsigned long lastSendBytes, lastReceiveBytes;
-	Timer networkTimer;
+	unsigned long totalJiffies_, workJiffies_;
+	unsigned long lastSendBytes_, lastReceiveBytes_;
+	Timer networkTimer_;
+	string netInterface_;
 	
 };
 
@@ -120,6 +129,7 @@ void PiGlowBar(int leg, float value, int brightness=20)
 }
 
 /// I2C module setup -- based on 'gpio' utility in the WiringPi library
+/// Requires program to be run as root/sudo
 void ChangeOwner(const char *file)
 {
 	if (chown(file, getuid(), getgid()))
@@ -142,71 +152,68 @@ bool ModuleLoaded(const string &name)
 
 void SetupI2C()
 {
-	if (!ModuleLoaded("i2c_dev")) system("modprobe i2c_dev") ;
-	if (!ModuleLoaded("i2c_bcm2708")) system("modprobe i2c_bcm2708") ;
-
-	if (!ModuleLoaded("i2c_bcm2708")) throw runtime_error("Unable to load i2c_bcm2708 module");
+	bool modulesPreLoaded=true;
+	if (!ModuleLoaded("i2c_dev"))
+	{
+		modulesPreLoaded=false;
+		system("modprobe i2c_dev");
+	}
+	if (!ModuleLoaded("i2c_bcm2708")) 
+	{
+		modulesPreLoaded=false;
+		system("modprobe i2c_bcm2708");
+		if (!ModuleLoaded("i2c_bcm2708")) throw runtime_error("Unable to load i2c_bcm2708 module");
+	}
 	
-	sleep(1);
-	ChangeOwner("/dev/i2c-0");
-	ChangeOwner("/dev/i2c-1");	
-	
+	if (!modulesPreLoaded)
+	{
+		sleep(1);
+		ChangeOwner("/dev/i2c-0");
+		ChangeOwner("/dev/i2c-1");
+	}	
 }
 
-void KillExistingInstances(const char* name) 
+/// Kill existing instances of the program
+void KillExistingInstances(char* name) 
 {
-    DIR* dir;
-    struct dirent* ent;
-    char buf[512];
+	DIR* dir;
+	struct dirent* ent;
 
-    long  pid;
-    char pname[100] = {0,};
-    char state;
-    FILE *fp=NULL; 
+	// Get the PID and name of the current program
+	pid_t localPid = getpid();
+	const char *bname = basename(name);
 
-    if (!(dir = opendir("/proc"))) {
-        perror("can't open /proc");
-        return -1;
-    }
+	// Run through /proc/<integer>/stat files
+	if (!(dir = opendir("/proc"))) throw runtime_error("Can't open /proc");
+	while ((ent = readdir(dir)) != NULL) 
+	{
+		long lpid = atol(ent->d_name);
+		if (lpid <= 0 || lpid==localPid) continue; // skip non-processes and this process
 
-    while((ent = readdir(dir)) != NULL) {
-        long lpid = atol(ent->d_name);
-        if (lpid < 0) continue;
-        
-        ostringstream fname;
-        fname << "/proc/" << lpid << "/stat":
-        
-        ifstream statfile(fname.str());
-        if (!statfile.is_open()) throw runtime_error("Can't open stat file");
-        
-        string procname;
-        int pid;
-        statfile >> pid >> procname;
-        statfile.close();
-        
-        if (procname.size()<3 || procname[0]!='(' || procname[procname.size()-1]!=')') throw runtime_error("Can't parse stat file");
-        procname=procname.substr(1,procname.size()-2); // trim parentheses
-        
-        if (procname==name) kill(pid, SIGTERM);
-        if (fp) {
-            if ( (fscanf(fp, "%ld (%[^)]) %c", &pid, pname, &state)) != 3 ){
-                printf("fscanf failed \n");
-                fclose(fp);
-                closedir(dir);
-                return -1; 
-            }
-            if (!strcmp(pname, name)) {
-                fclose(fp);
-                closedir(dir);
-                return (pid_t)lpid;
-            }
-            fclose(fp);
-        }
-    }
+		ostringstream fname;
+		fname << "/proc/" << lpid << "/stat";
+		ifstream statfile(fname.str().c_str());
+		if (!statfile.is_open()) throw runtime_error("Can't open stat file");
 
+		/// Extract process name
+		statfile.ignore(numeric_limits<streamsize>::max(), '(');
+		string procname;
+		getline(statfile, procname, ')');
+		statfile.close();
+		if (procname.size()==0) throw runtime_error("Can't parse stat file");
 
-closedir(dir);
-return -1;
+		/// Kill existing instances of this program
+		if (procname==bname) 
+		{
+			if (kill(lpid, SIGTERM)!=0)
+			{
+				ostringstream err;
+				err << "Can't kill existing "<< bname << " process (pid "<<lpid<<")";
+				throw runtime_error(err.str().c_str());
+			}
+		}
+	}
+	closedir(dir);
 }
 
 	
@@ -232,24 +239,45 @@ void SetupSignals()
     if (oldAction.sa_handler != SIG_IGN) sigaction(SIGHUP, &newAction, NULL);	
 }
 
+
 int main(int argc, char *argv[])
 {
-	int opt, ledBrightness=20, consoleMode=0;
-	while ((opt = getopt(argc, argv, "c?hb:")) != -1)
+	// Default command line arguments
+	int opt, ledBrightness=20, consoleMode=0, delayMs=1000;
+	string netInterface("eth0");
+
+	// Process command line arguments
+	while ((opt = getopt(argc, argv, "c?hb:n:d:")) != -1)
 	{
 		switch (opt)
 		{
 	
 		case 'b':
 			ledBrightness = atoi(optarg);
+			if (ledBrightness<1) ledBrightness=1;
+			if (ledBrightness>100) ledBrightness=100;
+			break;
+		case 'd':
+			delayMs = atoi(optarg);
+			if (delayMs < 10) delayMs=10;
+			break;
+		case 'n':
+			netInterface=string(optarg);
 			break;
 		case 'c':
 			consoleMode=1;
 			break;
 		case '?': case 'h':
-			cout << "Usage: " << argv[0] << " [-b brightness] [-c] [-h] [-?]\n\n" << endl;
+			cout << "Usage: " << argv[0] << " [-b brightness] [-n interface] [-d delay] [-c] [-h] [-?]\n\n" << endl;
 			cout << "       -b brightness\n"
-			     << "            sets the maximum LED brightess (between 1 and 100)\n"
+			     << "            Sets the maximum LED brightess (between 1 and 100).\n"
+			     << "            Default is 20.\n"
+			     << "       -n interface\n"
+			     << "            Specifies the network interface to monitor.\n"
+			     << "            Default is eth0.\n"
+			     << "       -d delay\n"
+			     << "            Specifies the delay in milliseconds between updates.\n"
+			     << "            Minimum is 10. Default is 1000. \n"
 			     << "       -c\n"
 			     << "            Runs program at the console (when omitted, the default\n"
 			     << "            behaviour is to fork a background process)\n"
@@ -261,14 +289,18 @@ int main(int argc, char *argv[])
 			break;
 		}
 	}
+
 	try 
 	{
-		PiMonitor pm;
+		// Setup
+		KillExistingInstances(argv[0]);
+		PiMonitor pm(netInterface);
 		SetupSignals();
 		SetupI2C();
 		wiringPiSetupSys();
 		piGlowSetup(0);
 		
+		// If not in console mode, fork a background processs
 		if (!consoleMode)
 		{
 			int forkval=fork();
@@ -280,6 +312,8 @@ int main(int argc, char *argv[])
 			if (forkval>0) return 0; // In parent process, so quit
 			// Must be in child process from here on
 		}
+
+		// Main loop
 		while (!quit)
 		{
 			float rec, send, temp, cpu;
@@ -291,7 +325,7 @@ int main(int argc, char *argv[])
 			PiGlowBar(1, cpu/100.0, ledBrightness);
 			PiGlowBar(2, (log((rec+send)/1e2)/log(10))/6.0, ledBrightness);
 			
-			sleep(1);
+			usleep(1000*delayMs);
 		}
 		
 		// Turn off all LEDs on quit
@@ -299,7 +333,7 @@ int main(int argc, char *argv[])
 	}
 	catch (runtime_error &re)
 	{
-		cerr << re.what()<< endl;
+		cerr << re.what() << endl;
 		return 1;
 	}	
 	return 0;

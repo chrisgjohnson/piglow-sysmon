@@ -1,5 +1,5 @@
 CC=g++
-CFLAGS=-c -Wall 
+CFLAGS=-c -O2 -Wall 
 LDFLAGS=-lrt -lwiringPi -lwiringPiDev
 SOURCES=piglow-sysmon.cpp
 OBJECTS=$(SOURCES:.cpp=.o)
