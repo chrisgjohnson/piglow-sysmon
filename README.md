@@ -3,6 +3,7 @@ piglow-sysmon
 A system monitor application for the Raspberry Pi / PiGlow.
 Displays CPU usage, network usage and temperature as bar charts on the PiGlow
 
+piglow-sysmon is written in C++ and is distributed under the GNU General Public License v3
 
 Installation
 ------------
@@ -23,6 +24,18 @@ To compile, simply run
 
 in the program directory.
 
+Running
+-------
+
+Run with
+
+	./piglow-sysmon
+
+Note that piglow-sysmon requires the i2c_dev and i2c_bcm2708 kernel modules to be loaded, in order to communicate with the PiGlow. piglow-sysmon will attempt to load these modules if they are not already loaded, but this will succeed only if it is run as root (i.e. `sudo ./piglow-sysmon`). Alternatively, these modules can be loaded with the WiringPi utility gpio,
+
+	gpio load i2c
+
+prior to running piglow-sysmon.
 
 Usage
 -----
