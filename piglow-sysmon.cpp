@@ -33,6 +33,8 @@
 #include <signal.h>
 #include <dirent.h>
 #include <libgen.h>
+#include <sys/sysinfo.h>
+#include <unistd.h>
 
 using namespace std;
 
@@ -64,11 +66,16 @@ private:
 class PiMonitor
 {
 public:
+	enum Parameters {PARAM_UPTIME, PARAM_CPU, PARAM_TEMP, PARAM_NETWORK, PARAM_RAM, PARAM_SDCARD};
 	PiMonitor(const string &netInterface) : netInterface_(netInterface)
 	{
 		float dummy;
 		GetCPUUsage();
 		GetNetworkUsage(dummy, dummy);
+	}
+	long GetUptime()
+	{
+		return systemInfo.uptime;
 	}
 	float GetCPUUsage()
 	{
@@ -127,6 +134,7 @@ public:
 		lastSendBytes_=sendBytes;
 	}
 private:
+	struct sysinfo systemInfo;
 	unsigned long totalJiffies_, workJiffies_;
 	unsigned long lastSendBytes_, lastReceiveBytes_;
 	Timer networkTimer_;
@@ -262,10 +270,11 @@ int main(int argc, char *argv[])
 {
 	// Default command line arguments
 	int opt, ledBrightness=20, consoleMode=0, delayMs=1000;
+	bool terminateOnly=false;
 	string netInterface("eth0");
 
 	// Process command line arguments
-	while ((opt = getopt(argc, argv, "c?hb:n:d:")) != -1)
+	while ((opt = getopt(argc, argv, "kc?hb:n:d:")) != -1)
 	{
 		switch (opt)
 		{
@@ -285,6 +294,9 @@ int main(int argc, char *argv[])
 		case 'c':
 			consoleMode=1;
 			break;
+		case 'k':
+			terminateOnly=true;
+			break;
 		case '?': case 'h':
 			cout << "Usage: " << argv[0] << " [-b brightness] [-n interface] [-d delay] [-c] [-h] [-?]\n\n" << endl;
 			cout << "       -b brightness\n"
@@ -296,6 +308,8 @@ int main(int argc, char *argv[])
 			     << "       -d delay\n"
 			     << "            Specifies the delay in milliseconds between updates.\n"
 			     << "            Minimum is 10. Default is 1000. \n"
+			     << "       -k\n"
+			     << "            Terminates any existing instances of piglow-sysmon.\n"
 			     << "       -c\n"
 			     << "            Runs program at the console (when omitted, the default\n"
 			     << "            behaviour is to fork a background process)\n"
@@ -312,6 +326,8 @@ int main(int argc, char *argv[])
 	{
 		// Setup
 		KillExistingInstances(argv[0]);
+		if (terminateOnly) return 0;
+
 		PiMonitor pm(netInterface);
 		SetupSignals();
 		SetupI2C();
@@ -339,9 +355,12 @@ int main(int argc, char *argv[])
 			cpu=pm.GetCPUUsage();
 			pm.GetNetworkUsage(rec,send);
 			
-			PiGlowBar(0, (temp-40.0)/40.0, ledBrightness);
-			PiGlowBar(1, cpu/100.0, ledBrightness);
-			PiGlowBar(2, (log((rec+send)/1e2)/log(10))/6.0, ledBrightness);
+			for (int bar=0; bar<2; bar++)
+			{
+				PiGlowBar(0, (temp-40.0)/40.0, ledBrightness);
+				PiGlowBar(1, cpu/100.0, ledBrightness);
+				PiGlowBar(2, (log((rec+send)/1e2)/log(10))/6.0, ledBrightness);
+			}
 			
 			usleep(1000*delayMs);
 		}
