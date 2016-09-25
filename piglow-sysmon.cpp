@@ -274,7 +274,7 @@ int main(int argc, char *argv[])
 	string netInterface("eth0");
 
 	// Process command line arguments
-	while ((opt = getopt(argc, argv, "kc?hb:n:d:")) != -1)
+	while ((opt = getopt(argc, argv, "kc?hb:n:d:e:")) != -1)
 	{
 		switch (opt)
 		{
@@ -292,6 +292,7 @@ int main(int argc, char *argv[])
             maxBitsPerSecond = atoi(optarg);
             if (maxBitsPerSecond < 1)
                 maxBitsPerSecond = 1;
+			break;
 		case 'n':
 			netInterface=string(optarg);
 			break;
