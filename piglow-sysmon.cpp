@@ -269,7 +269,7 @@ void SetupSignals()
 int main(int argc, char *argv[])
 {
 	// Default command line arguments
-	int opt, ledBrightness=20, consoleMode=0, delayMs=1000;
+	int opt, ledBrightness=20, consoleMode=0, delayMs=1000, maxBitsPerSecond=1e8;
 	bool terminateOnly=false;
 	string netInterface("eth0");
 
@@ -288,6 +288,10 @@ int main(int argc, char *argv[])
 			delayMs = atoi(optarg);
 			if (delayMs < 10) delayMs=10;
 			break;
+		case 'e':
+            maxBitsPerSecond = atoi(optarg);
+            if (maxBitsPerSecond < 1)
+                maxBitsPerSecond = 1;
 		case 'n':
 			netInterface=string(optarg);
 			break;
@@ -298,7 +302,7 @@ int main(int argc, char *argv[])
 			terminateOnly=true;
 			break;
 		case '?': case 'h':
-			cout << "Usage: " << argv[0] << " [-b brightness] [-n interface] [-d delay] [-c] [-h] [-?]\n\n" << endl;
+			cout << "Usage: " << argv[0] << " [-b brightness] [-n interface] [-d delay] [-e bits-per-second] [-c] [-h] [-?]\n\n" << endl;
 			cout << "       -b brightness\n"
 			     << "            Sets the maximum LED brightess (between 1 and 100).\n"
 			     << "            Default is 20.\n"
@@ -308,6 +312,10 @@ int main(int argc, char *argv[])
 			     << "       -d delay\n"
 			     << "            Specifies the delay in milliseconds between updates.\n"
 			     << "            Minimum is 10. Default is 1000. \n"
+			     << "       -e bits-per-second\n"
+			     << "            Specifies the number of bits per second (combined incoming\n"
+			     << "            and outgoing) corresponding to a fully illuminated bar. \n"
+			     << "            Minimum is 1. Default is 100,000,000 (100MBit). \n"
 			     << "       -k\n"
 			     << "            Terminates any existing instances of piglow-sysmon.\n"
 			     << "       -c\n"
@@ -359,7 +367,7 @@ int main(int argc, char *argv[])
 			{
 				PiGlowBar(0, (temp-40.0)/40.0, ledBrightness);
 				PiGlowBar(1, cpu/100.0, ledBrightness);
-				PiGlowBar(2, (log((rec+send)/1e2)/log(10))/6.0, ledBrightness);
+				PiGlowBar(2, (log(1.0e6*(rec+send)/maxBitsPerSecond)/log(10))/6.0, ledBrightness);
 			}
 			
 			usleep(1000*delayMs);
